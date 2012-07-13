@@ -41,7 +41,19 @@ class SearchModule(Component):
     implements(INavigationContributor, IPermissionRequestor, IRequestHandler,
                ITemplateProvider, IWikiSyntaxProvider)
 
-    search_sources = ExtensionPoint(ISearchSource)
+    _search_sources = ExtensionPoint(ISearchSource)
+    
+    @property
+    def search_sources(self):
+        return [source for source in self._search_sources
+                if source.__class__.__name__ not in self.disabled_sources]
+
+    disabled_sources = ListOption('search', 'disabled_sources',
+                                  [],
+        doc="""Components that will be skipped as search sources. Used by
+        FullTextSearchPlugin to override sources it has implemented.
+
+        Logica addition.""")
     
     RESULTS_PER_PAGE = 10
 
@@ -59,6 +71,23 @@ class SearchModule(Component):
                returned tuple. Once disabled, search filters can still
                be manually enabled by the user on the search page.
                (since 0.12)""")
+
+    # Public methods
+
+    def get_available_filters(self, req):
+        """Return a list of filters that are available.
+        
+        Each filter is a `(name, label, default)` tuple, where `name` is
+        the internal name, `label` is a human-readable name for display and
+        `default` is a boolean for determining whether this filter is
+        searchable by default.
+        """
+        if 'SEARCH_VIEW' in req.perm:
+            return [(f[0], f[1], (len(f) < 3 or len(f) > 2 and f[2]))
+                    for source in self.search_sources
+                    for f in (source.get_search_filters(req) or [])]
+        else:
+            return []
 
     # INavigationContributor methods
 
@@ -88,11 +117,7 @@ class SearchModule(Component):
                     'application/opensearchdescription+xml')
 
         query = req.args.get('q')
-        available_filters = []
-        for source in self.search_sources:
-            available_filters.extend(source.get_search_filters(req) or [])
-        available_filters.sort(key=lambda f: f[1].lower())
-        
+        available_filters = self.get_available_filters(req)
         filters = self._get_selected_filters(req, available_filters)
         data = self._prepare_data(req, query, available_filters, filters)
         if query:
@@ -144,8 +169,7 @@ class SearchModule(Component):
         filters = [f[0] for f in available_filters if f[0] in req.args]
         if not filters:
             filters = [f[0] for f in available_filters
-                       if f[0] not in self.default_disabled_filters and
-                       (len(f) < 3 or len(f) > 2 and f[2])]
+                       if f[0] not in self.default_disabled_filters and f[2]]
         return filters
         
     def _prepare_data(self, req, query, available_filters, filters):
